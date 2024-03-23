@@ -16,6 +16,7 @@ using System.Runtime.CompilerServices;
 using System.Text;
 using System.Threading.Tasks;
 using Color = SadRogue.Primitives.Color;
+using Point = SadRogue.Primitives.Point;
 
 namespace Physilyzer.Optilyzer
 {
@@ -38,7 +39,7 @@ namespace Physilyzer.Optilyzer
 			this.n1 = n1;
 			this.n2 = n2;
 			this.θ1 = θ1;
-			θ2 = Math.Asin(n1 * Math.Sin(θ1) / n2);
+			θ2 = Math.Asin(n1 / n2 * Math.Sin(θ1));
 			θr = -θ1;
 			θk = Math.Asin(n2 / n1);
 			θb = Math.Atan(n2 / n1);
@@ -60,7 +61,9 @@ namespace Physilyzer.Optilyzer
 		readonly TextBox output_θb;
 		readonly TextBox output_rte;
 		readonly TextBox output_rtm;
+		readonly ToggleSwitch wobble_switch;
 		readonly Label label_tir;
+		readonly Effect fx;
 
 		Model model = new(1, 2, Convert.ToRAD(30));
 		RenderTarget2D canvasTarget;
@@ -90,8 +93,13 @@ namespace Physilyzer.Optilyzer
 			label_tir = new Label("! total internal reflection") { TextColor = Color.Red, Position = new(1, height - 2) };
 			Controls.Add(label_tir);
 
+			wobble_switch = new ToggleSwitch(6, 1) { Text = "wobble", Position = new(width - 8, 1) };
+			Controls.Add(wobble_switch);
+
 			canvasTarget = new RenderTarget2D(Global.GraphicsDevice, WidthPixels, HeightPixels);
 			vectorBatch = new VectorBatch(Global.GraphicsDevice) { Background = Color.Transparent };
+
+			fx = SadConsole.Game.Instance.MonoGameInstance.Content.Load<Effect>("bin/wobble");
 
 			Refresh();
 		}
@@ -153,14 +161,24 @@ namespace Physilyzer.Optilyzer
 
 			var vk = Vector3.Transform(unit, Matrix.CreateRotationZ((float)model.θk));
 			vectorBatch.Add(Vector3.Zero, vk, vk * new Vector3(-1, 1, 0), Color.DimGray);
+		}
 
-			vectorBatch.Draw(canvasTarget);
+		public override void Update(TimeSpan delta)
+		{
+			base.Update(delta);
+			fx.Parameters["time"].SetValue((float)SadConsole.Game.Instance.GameRunningTotalTime.TotalSeconds);
+			vectorBatch.Draw(canvasTarget, wobble_switch.IsSelected ? fx : null);
 		}
 
 		public override void Render(TimeSpan delta)
 		{
 			base.Render(delta);
-			var call = new DrawCallTexture(canvasTarget, new(0, 0));
+			var call = new DrawCallCustom(() =>
+			{
+				var radius = Math.Min(WidthPixels, HeightPixels) / 2;
+				var bounds = SadRogue.Primitives.Rectangle.WithRadius(new Point(WidthPixels, HeightPixels) / 2f, radius, radius).ToMonoRectangle();
+				Global.SharedSpriteBatch.Draw(canvasTarget, Global.GraphicsDevice.Viewport.Bounds, Color.White.ToMonoColor());
+			});
 			GameHost.Instance.DrawCalls.Enqueue(call);
 		}
 	}
@@ -198,7 +216,7 @@ namespace Physilyzer.Optilyzer
 
 	class VectorBatch(GraphicsDevice graphicsDevice)
 	{
-		readonly List<VertexPositionColor> vertices = new();
+		readonly List<VertexPositionColorTexture> vertices = new();
 		readonly List<int> lineIndicies = new();
 		readonly List<int> triangleIndicies = new();
 		readonly Effect basicEffect = new BasicEffect(graphicsDevice) { VertexColorEnabled = true }; 
@@ -221,9 +239,9 @@ namespace Physilyzer.Optilyzer
 			var monoColor = color.ToMonoColor();
 			lineCount++;
 			lineIndicies.Add(vertices.Count);
-			vertices.Add(new VertexPositionColor(offset, monoColor));
+			vertices.Add(new(offset, monoColor, new(0, 0)));
 			lineIndicies.Add(vertices.Count);
-			vertices.Add(new VertexPositionColor(offset + direction, monoColor));
+			vertices.Add(new(offset + direction, monoColor, new(1, 1)));
 		}
 
 		public void Add(Vector3 a, Vector3 b, Vector3 c, Color color)
@@ -231,11 +249,11 @@ namespace Physilyzer.Optilyzer
 			var monoColor = color.ToMonoColor();
 			triangleCount++;
 			triangleIndicies.Add(vertices.Count);
-			vertices.Add(new(a, monoColor));
+			vertices.Add(new(a, monoColor, new(0, 0)));
 			triangleIndicies.Add(vertices.Count);
-			vertices.Add(new(b, monoColor));
+			vertices.Add(new(b, monoColor, new(0, 0)));
 			triangleIndicies.Add(vertices.Count);
-			vertices.Add(new(c, monoColor));
+			vertices.Add(new(c, monoColor, new(1, 0)));
 		}
 
 		public void Draw(RenderTarget2D renderTarget, Effect? effect = null)
@@ -243,16 +261,15 @@ namespace Physilyzer.Optilyzer
 			effect = effect ?? basicEffect;
 			graphicsDevice.SetRenderTarget(renderTarget);
 			graphicsDevice.Clear(Background.ToMonoColor());
+
+			var vertexData = vertices.ToArray();
+			var triangleData = triangleIndicies.ToArray();
+			var lineData = lineIndicies.ToArray();
+
 			foreach (var pass in effect.CurrentTechnique.Passes)
 			{
 				pass.Apply();
-
-				var vertexData = vertices.ToArray();
-
-				var triangleData = triangleIndicies.ToArray();
 				graphicsDevice.DrawUserIndexedPrimitives(PrimitiveType.TriangleList, vertexData, 0, vertexData.Length, triangleData, 0, triangleCount);
-
-				var lineData = lineIndicies.ToArray();
 				graphicsDevice.DrawUserIndexedPrimitives(PrimitiveType.LineList, vertexData, 0, vertexData.Length, lineData, 0, lineCount);
 			}
 		}
